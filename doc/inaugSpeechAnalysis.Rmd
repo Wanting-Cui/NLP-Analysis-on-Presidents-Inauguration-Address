@@ -1,0 +1,587 @@
+---
+title: "Inaguration Speech"
+output:
+  html_document: default
+  html_notebook: default
+---
+
+# Introduction
+I believe most people know President Donald Trump's campaign slogan is "Make America Great Again.", but do you know this slogan was first used during President Ronald Reagan's 1980 presidential campaign. This slogan is later adopted by President Cliton for his campiagn, though it's never formly used as a campaign slogan. One slogan, using by 3 presidents from different parties, spanning over 3 decades is an interesting fact to consider.
+\newline
+
+Inauguration speech, alongside campaign slogan, delievers a president's political view and ideology. So, in this project, I would like to investigate how presidential speeches change through time and how they reflect different political preferences from two parties (Democrat and Reublican) in historial contexts.
+\newline
+
+Lengths, emotions, and topics are some important components of a speeach. So I would like to investigate these three aspects using beeswarm plots, sentiment analysis and topic modeling.
+\newline
+
+Note: Methods used in beeswarm, sentiment analysis and topic modeling are based on Professor Ying Liu's tutorial on text mining.
+\newline
+
+https://github.com/TZstatsADS/ADS_Teaching/blob/master/Tutorials/wk2-TextMining/doc/wk2-Tutorial-TextMining.Rmd
+
+```{r}
+# Check and install needed packages
+
+packages.used=c("rvest", "tibble", "qdap", 
+                "sentimentr", "gplots", "dplyr",
+                "tm", "syuzhet", "factoextra", 
+                "beeswarm", "scales", "RColorBrewer",
+                "RANN", "tm", "topicmodels", "xlxs", "reshape2")
+
+# check packages that need to be installed.
+packages.needed=setdiff(packages.used, 
+                        intersect(installed.packages()[,1], 
+                                  packages.used))
+# install additional packages
+if(length(packages.needed)>0){
+  install.packages(packages.needed, dependencies = TRUE)
+}
+```
+
+```{r,message=FALSE, warning=FALSE}
+# library needed packages
+
+library(xlsx)
+library(reshape2)
+library(dplyr)
+
+library("rvest")
+library("tibble")
+library("qdap")
+library("sentimentr")
+library("gplots")
+library("tm")
+library("syuzhet")
+library("factoextra")
+library("beeswarm")
+library("scales")
+library("RColorBrewer")
+library("RANN")
+library("tm")
+library("topicmodels")
+
+source("../lib/plotstacked.R")
+source("../lib/speechFuncs.R")
+source("../lib/GetOccurence.R")
+```
+
+Note: This notebook was prepared with the following environmental settings.
+
+```{r}
+print(R.version)
+```
+
+# Cleaning Data
+In this section, I mainly focus on cleaning and combing data. There are three parts in the original data file. "InaugurationDates" is a txt file, contains president names and dates of their inauguration speeches. "InaugurationInfo" is a xlxs file, includes president names, corresponding file name of their speeches, term, party and words of each speech. The third file is a folder which contains all the inaguration speeches. 
+\newline
+
+I first merge the first two dataframes, based on president names and term. Then I read in all the inauguration text files and combine them with the corresponding presidents and their info. Texts are stored in the column "Fulltext". All the information is stored in the dataframe "speech".
+\newline
+
+Note: Harry S. Truman's speech is missing, so I exclude it from "speech".
+\newline
+
+```{r,message=FALSE, warning=FALSE}
+dates <- read.table("../data/InauguationDates.txt", header = TRUE, fill = TRUE, sep = "\t")
+info <- read.xlsx("../data/InaugurationInfo.xlsx", 1,header = TRUE, as.is = TRUE)
+getwd()
+
+dates2 <- melt(dates, id = "PRESIDENT")
+dates2$variable <- as.numeric(as.factor(dates2$variable))
+del <- which(dates2$value == "")
+dates2 <- dates2[-del, ]
+
+# Manually change some presidents' names, to make names identical in two dataframes
+dates2$PRESIDENT <- as.character(dates2$PRESIDENT)
+info$President <- as.character(info$President)
+dates2[8,1] <- toString("Martin van Buren")
+dates2[11,1] <- toString("James K. Polk")
+dates2[20,1] <- toString("James Garfield")
+info[25,1] <- toString("Grover Cleveland")
+info[27,1] <- toString("Grover Cleveland")
+dates2[which(dates2$PRESIDENT == "Richard M. Nixon"),1] <- "Richard Nixon"
+
+# Merge df based on president and term
+speech <- info %>%
+  left_join(dates2, by = c("President" = "PRESIDENT")) %>%
+  filter(Term == variable)
+ speech<- speech%>%
+   select("President", "File","Term", "Party", "Words", "value")
+colnames(speech)[6] <- "Date"
+speech$Date <- as.Date(speech$Date, format = "%m/%d/%Y")
+# 
+# # Harry S. Truman's speech is missing from the file
+speech <- speech[-41, ]
+```
+
+```{r,message=FALSE, warning=FALSE}
+# Combine the correspoinding speech into the df
+speech$Fulltext <- NA
+combtext <- function(df){
+  exp <- paste("../data/InauguralSpeeches/inaug",df[2],"-",df[3],".txt",sep = "")
+  return(paste(readLines(exp), collapse = " "))
+}
+
+speech$Fulltext <- apply(speech,1,combtext)
+
+write.csv(speech, file = "../output/speech.csv")
+```
+
+
+# Data Exploratory: Overview
+
+In order to investigate how time and political parties influence the contents of speeches, I would like take a general look on some basic information. The first question came to me was how many parties are there? And how many presidents from each party? There are a total of 38 presidents included in this project. 13 of them are Democrats and 17 of them Republicans. The rest of them are before Democrat and Republican are formed, so I exclude them from the proeject.
+\newline
+
+Second, I want to look at the length of those speeches. So, I divde data based on party and term, and draw the correspoinding boxplots based on word counts. According to the graph, speeches given by Republican presidents tend to be longer than the ones given by Democratic presidents, and with larger variance. Also, The length of presidents' first term speeches have more variation of that of the second speeches. 
+
+```{r}
+speech%>%
+  group_by(Party)%>%
+  summarise(Count = n_distinct(President))
+speech$Words <- as.numeric(as.character(speech$Words))
+speech.rep.1 <- filter(speech, Term == 1, Party == "Republican")
+speech.rep.2 <- filter(speech, Term == 2, Party == "Republican")
+speech.dem.1 <- filter(speech, Term == 1, Party == "Democratic")
+speech.dem.2 <- filter(speech, Term == 2, Party == "Democratic")
+
+png("../output/boxplot.png")
+boxplot(speech.rep.1$Words, speech.rep.2$Words, speech.dem.1$Words, speech.dem.2$Words,
+        names = c("Republican Term 1", "Republican Term 2", "Democratic Term 1", "Democratic Term 2"))
+dev.off()
+
+boxplot(speech.rep.1$Words, speech.rep.2$Words, speech.dem.1$Words, speech.dem.2$Words,
+        names = c("Republican Term 1", "Republican Term 2", "Democratic Term 1", "Democratic Term 2"))
+```
+
+## Number of Words in a Sentence
+A major factor that influences the length of a speech is number of words in each senetences. So, in this section, I want to look into it. Term one seems like an interesting place to start, since it has more variation, and the length of speeches from the two parties is different as well. 
+\newline
+
+I break the fulltext into sentences, using punctuations to detect the end of a sentence. And stored all these information in "sentence.list".
+```{r,message=FALSE, warning=FALSE}
+sentence.list=NULL
+
+# Use punctuations to detect the end of a sentence
+for(i in 1:nrow(speech)){
+  sentences=sent_detect(speech$Fulltext[i],
+                        endmarks = c("?", ".", "!", "|",";"))
+  if(length(sentences)>0){
+    emotions=get_nrc_sentiment(sentences)
+    word.count=word_count(sentences)
+    # colnames(emotions)=paste0("emo.", colnames(emotions))
+    # in case the word counts are zeros?
+    emotions=diag(1/(word.count+0.01))%*%as.matrix(emotions)
+    sentence.list=rbind(sentence.list, 
+                        cbind(speech[i,-ncol(speech)],
+                              sentences=as.character(sentences), 
+                              word.count,
+                              emotions,
+                              sent.id=1:length(sentences)
+                              )
+    )
+  }
+}
+```
+
+
+```{r}
+
+sentence.list=
+  sentence.list%>%
+  filter(!is.na(word.count)) 
+
+sentence.list$Date <- as.Date(sentence.list$Date, format = "%m/%d/%Y")
+```
+Filter out sentences with no word count.
+
+```{r}
+
+sentence.list.dem <- filter(sentence.list, Party == "Democratic", Term ==1)
+sentence.list.dem$File <- as.factor(as.character(sentence.list.dem$File))
+sentence.list.dem <- sentence.list.dem[order(sentence.list.dem$Date), ]
+sentence.list.dem$File = factor(sentence.list.dem$File,levels(sentence.list.dem$File)[c(unique(sentence.list.dem$File))])
+png("../output/senDem.png")
+beeswarm(word.count~File, data = sentence.list.dem,
+         horizontal = TRUE,
+         pch=16, col=alpha(brewer.pal(9, "Set1"), 0.6), 
+         cex=0.55, cex.axis=0.8, cex.lab=0.8,
+         spacing=5/nlevels(sentence.list.dem$File),
+         las=2, xlab="Number of words in a sentence.", ylab="",
+         main="Democratic"
+         )
+dev.off()
+
+sentence.list.rep <- filter(sentence.list, Party == "Republican", Term == 1)
+sentence.list.rep$File <- as.factor(as.character(sentence.list.rep$File))
+sentence.list.rep <- sentence.list.rep[order(sentence.list.rep$Date), ]
+sentence.list.rep$File = factor(sentence.list.rep$File,levels(sentence.list.rep$File)[c(unique(sentence.list.rep$File))])
+png("../output/senRep.png")
+beeswarm(word.count~File, data = sentence.list.rep,
+         horizontal = TRUE,
+         pch=16, col=alpha(brewer.pal(9, "Set1"), 0.6), 
+         cex=0.55, cex.axis=0.8, cex.lab=0.8,
+         spacing=5/nlevels(sentence.list.rep$File),
+         las=2, xlab="Number of words in a sentence.", ylab="",
+         main="Republican"
+         )
+dev.off()
+```
+Rearranging presidents into chronological order.
+
+```{r}
+par(mfrow=c(1,2))
+beeswarm(word.count~File, data = sentence.list.dem,
+         horizontal = TRUE,
+         pch=16, col=alpha(brewer.pal(9, "Set1"), 0.6), 
+         cex=0.55, cex.axis=0.8, cex.lab=0.8,
+         spacing=5/nlevels(sentence.list.dem$File),
+         las=2, xlab="Number of words in a sentence.", ylab="",
+         main="Democratic"
+         )
+beeswarm(word.count~File, data = sentence.list.rep,
+         horizontal = TRUE,
+         pch=16, col=alpha(brewer.pal(9, "Set1"), 0.6), 
+         cex=0.55, cex.axis=0.8, cex.lab=0.8,
+         spacing=5/nlevels(sentence.list.rep$File),
+         las=2, xlab="Number of words in a sentence.", ylab="",
+         main="Republican"
+         )
+```
+\newline
+
+All the presidents are arranged in chronological order, as Barack Obama is the lastest president who is a democrat, and Andrew Jackson is the first democratic president. Although there is little difference on number of words between Democrats and Republican. One interesting finding is that, presidents in the past usually use longer sentences. However, as time changes, the line for each president changes from a consistent scatter into an alternation between sparse and scattered. This pattern suggests that speech structures of morden presidents are a combination of short and long sentences. 
+
+# Short Sentences: What did they say?
+Now let's take a closer look at the short sentences. Why short sentences rarely exist in the old days, but become more and more popular in morden days? I define short sentences, as word counts between 3 to 10, because sentences with word count less than three are normally incomplete or with little useful information, such as phrases Mr., Thank you!.
+
+```{r}
+set.seed(123)
+# 21st Century
+Trump <- sentence.list%>%
+  filter(File=="DonaldJTrump", 
+         Term == 1, 
+         word.count >=3, word.count<=10)%>%
+  select(sentences)%>%sample_n(10)
+
+Obama <- sentence.list%>%
+  filter(File=="BarackObama",
+         Term == 1,
+         word.count >=3, word.count<=10)%>%
+  select(sentences)%>%sample_n(10)
+
+# 1990s
+Clinton <- sentence.list%>%
+  filter(File=="WilliamJClinton",
+         Term == 1,
+         word.count >=3, word.count<=10)%>%
+  select(sentences)%>%sample_n(10)
+
+# 1980s
+Reagan <- sentence.list%>%
+  filter(File=="RonaldReagan",
+         Term == 1,
+         word.count >=3, word.count<=10)%>%
+  select(sentences)%>%sample_n(10)
+
+# 1970s
+Nixon <- sentence.list%>%
+  filter(File=="RichardNixon",
+         Term == 1,
+         word.count >=3, word.count<=10)%>%
+  select(sentences)%>%sample_n(10)
+
+# 1960s
+Kennedy <- sentence.list%>% 
+ filter(File=="JohnFKennedy",
+         Term == 1,
+         word.count >=3, word.count<=10)%>%
+  select(sentences)%>%sample_n(10)
+
+# 19th century  
+Lincoln <- sentence.list%>% 
+ filter(File=="AbrahamLincoln",
+         Term == 1,
+         word.count >=3, word.count<=10)%>%
+  select(sentences)%>%sample_n(10)
+
+# Combine to a dataframe
+shortSen <- data.frame(cbind(Trump, Obama, Clinton, Reagan, Nixon, Kennedy, Lincoln))
+colnames(shortSen) <- c("Trump", "Obama", "Clinton", "Reagan", "Nixon", "Kennedy", "Lincoln")
+write.csv(shortSen, file = "../output/ShortSentences.csv")
+
+shortSen[1:5, ]
+```
+From the result one can see that presidents in rencent decades start to adopt strong, concise and slogan-like sentences into their speeches. One great example is President Donald Trump. His campaign slogan is "Make American great again!". In his inauguration address, there are several phrases, such as "Together, we will make America strong again", "We will make America wealthy again", "We will make America safe again", which share the same paatern as his slogan. 
+
+# Sentiment Analysis
+Apart from the length of the speech, emotions delieved through the speech are also very important. In this section, I would like to do a sentiment comparison between Republican and Democrat.
+
+```{r}
+png(filename = "../output/heatmap.png")
+heatmap.2(cor(sentence.list%>%filter(Term ==1)%>%select(anger:trust)), 
+          scale = "none", 
+          col = bluered(100), , margin=c(6, 6), key=F,
+          trace = "none", density.info = "none")
+dev.off()
+
+heatmap.2(cor(sentence.list%>%filter(Term ==1)%>%select(anger:trust)), 
+          scale = "none", 
+          col = bluered(100), , margin=c(6, 6), key=F,
+          trace = "none", density.info = "none")
+
+par(mfrow = c(2,1))
+# emo.means=colMeans(select(sentence.list, anger:trust)>0.01)
+emo.means.dem=colMeans(sentence.list%>%filter(Party == "Democratic")%>%select(anger:trust)>0.01)
+col.use=c("red2", "darkgoldenrod1", 
+            "chartreuse3", "blueviolet",
+            "darkgoldenrod2", "dodgerblue3", 
+            "darkgoldenrod1", "darkgoldenrod1")
+png(filename = "../output/emoDem.png")
+barplot(emo.means.dem[order(emo.means.dem)], las=2, col=col.use[order(emo.means.dem)], horiz=T, main="Inaugural Speeches: Democratic")
+dev.off()
+
+emo.means.rep=colMeans(sentence.list%>%filter(Party == "Republican")%>%select(anger:trust)>0.01)
+col.use=c("red2", "darkgoldenrod1", 
+            "chartreuse3", "blueviolet",
+            "darkgoldenrod2", "dodgerblue3", 
+            "darkgoldenrod1", "darkgoldenrod1")
+png(filename = "../output/emoRep.png")
+barplot(emo.means.rep[order(emo.means.rep)], las=2, col=col.use[order(emo.means.rep)], horiz=T, main="Inaugural Speeches: Republican")
+dev.off()
+
+barplot(emo.means.dem[order(emo.means.dem)], las=2, col=col.use[order(emo.means.dem)], horiz=T, main="Inaugural Speeches: Democratic")
+barplot(emo.means.rep[order(emo.means.rep)], las=2, col=col.use[order(emo.means.rep)], horiz=T, main="Inaugural Speeches: Republican")
+```
+\newline
+
+From the heat map, we can see that all the negative emotions are clustered together, and all the positive ones also clustered together.
+\newline
+
+According the bar plots, positive emotions, expecially trust, dominate inauguration addresses for both parties. In my opinion, inauguration address is a way to convience people that life in the next four years would better under the new lead. So, there is no surprise that trust and anticipation are the main emotions in those speeches.
+
+# Topic Modeling
+I believe topics are the soul to a speech. So, in this section, let's look at what are some topics that presidents covered in their speeches. 
+```{r}
+corpus.list=sentence.list[2:(nrow(sentence.list)-1), ]
+sentence.pre=sentence.list$sentences[1:(nrow(sentence.list)-2)]
+sentence.post=sentence.list$sentences[3:(nrow(sentence.list)-1)]
+corpus.list$snipets=paste(sentence.pre, corpus.list$sentences, sentence.post, sep=" ")
+rm.rows=(1:nrow(corpus.list))[corpus.list$sent.id==1]
+rm.rows=c(rm.rows, rm.rows-1)
+corpus.list=corpus.list[-rm.rows, ]
+```
+
+## Text Minnning
+Divide dataframes into four parts based on party and time. I used the year of 1900 as a seperation point, because it's the end of civil war and start of a new century.
+
+```{r}
+docs.rep.pre <- Corpus(VectorSource((corpus.list%>%
+                                  filter(Party == "Republican", Date < "1900-01-01")%>%
+                                  select(snipets))[,1]))
+docs.rep.post <- Corpus(VectorSource((corpus.list%>%
+                                  filter(Party == "Republican", Date >= "1900-01-01")%>%
+                                  select(snipets))[,1]))
+docs.dem.pre <- Corpus(VectorSource((corpus.list%>%
+                                  filter(Party == "Democratic", Date < "1900-01-01")%>%
+                                  select(snipets))[,1]))
+docs.dem.post <- Corpus(VectorSource((corpus.list%>%
+                                  filter(Party == "Democratic", Date >= "1900-01-01")%>%
+                                  select(snipets))[,1]))
+
+# writeLines(as.character(docs.rep.pre[1]))
+# writeLines(as.character(docs.rep.post[1]))
+# writeLines(as.character(docs.dem.pre[1]))
+# writeLines(as.character(docs.dem.post[1]))
+
+#remove potentially problematic symbols
+docs.rep.pre <-tm_map(docs.rep.pre,content_transformer(tolower))
+docs.rep.post <-tm_map(docs.rep.post,content_transformer(tolower))
+docs.dem.pre <-tm_map(docs.dem.pre,content_transformer(tolower))
+docs.dem.post <-tm_map(docs.dem.post,content_transformer(tolower))
+
+#remove punctuation
+docs.rep.pre <- tm_map(docs.rep.pre, removePunctuation)
+docs.rep.post <- tm_map(docs.rep.post, removePunctuation)
+docs.dem.pre <- tm_map(docs.dem.pre, removePunctuation)
+docs.dem.post <- tm_map(docs.dem.post, removePunctuation)
+
+#Strip digits
+docs.rep.pre <- tm_map(docs.rep.pre, removeNumbers)
+docs.rep.post <- tm_map(docs.rep.post, removeNumbers)
+docs.dem.pre <- tm_map(docs.dem.pre, removeNumbers)
+docs.dem.post <- tm_map(docs.dem.post, removeNumbers)
+
+#remove stopwords
+docs.rep.pre <- tm_map(docs.rep.pre, removeWords, stopwords("english"))
+docs.rep.post <- tm_map(docs.rep.post, removeWords, stopwords("english"))
+docs.dem.pre <- tm_map(docs.dem.pre, removeWords, stopwords("english"))
+docs.dem.post <- tm_map(docs.dem.post, removeWords, stopwords("english"))
+
+#remove whitespace
+docs.rep.pre <- tm_map(docs.rep.pre, stripWhitespace)
+docs.rep.post <- tm_map(docs.rep.post, stripWhitespace)
+docs.dem.pre <- tm_map(docs.dem.pre, stripWhitespace)
+docs.dem.post <- tm_map(docs.dem.post, stripWhitespace)
+
+#Stem document
+docs.rep.pre <- tm_map(docs.rep.pre,stemDocument)
+docs.rep.post <- tm_map(docs.rep.post,stemDocument)
+docs.dem.pre <- tm_map(docs.dem.pre,stemDocument)
+docs.dem.post <- tm_map(docs.dem.post,stemDocument)
+```
+
+Converting into a document term matrix
+```{r}
+dtm.rep.pre <- DocumentTermMatrix(docs.rep.pre)
+dtm.rep.post <- DocumentTermMatrix(docs.rep.post)
+dtm.dem.pre <- DocumentTermMatrix(docs.dem.pre)
+dtm.dem.post <- DocumentTermMatrix(docs.dem.post)
+
+#Find the sum of words in each Document
+rowTotals.rep.pre <- apply(dtm.rep.pre , 1, sum) 
+rowTotals.rep.post <- apply(dtm.rep.post , 1, sum)
+rowTotals.dem.pre <- apply(dtm.dem.pre , 1, sum)
+rowTotals.dem.post <- apply(dtm.dem.post , 1, sum)
+
+dtm.rep.pre  <- dtm.rep.pre[rowTotals.rep.pre> 0, ]
+dtm.rep.post  <- dtm.rep.post[rowTotals.rep.post> 0, ]
+dtm.dem.pre  <- dtm.dem.pre[rowTotals.dem.pre> 0, ]
+dtm.dem.post  <- dtm.dem.post[rowTotals.dem.post> 0, ]
+```
+
+## LDA
+Use LDA to find the top 10 terms in each topics
+```{r}
+burnin <- 4000
+iter <- 2000
+thin <- 500
+seed <-list(2003,5,63,100001,765)
+nstart <- 5
+best <- TRUE
+
+#Number of topics
+k <- 10
+
+#Run LDA using Gibbs sampling
+ldaOut.rep.pre <-LDA(dtm.rep.pre, k, method="Gibbs", control=list(nstart=nstart, 
+                                                 seed = seed, best=best,
+                                                 burnin = burnin, iter = iter, 
+                                                 thin=thin))
+ldaOut.rep.post <-LDA(dtm.rep.post, k, method="Gibbs", control=list(nstart=nstart, 
+                                                 seed = seed, best=best,
+                                                 burnin = burnin, iter = iter, 
+                                                 thin=thin))
+ldaOut.dem.pre <-LDA(dtm.dem.pre, k, method="Gibbs", control=list(nstart=nstart, 
+                                                 seed = seed, best=best,
+                                                 burnin = burnin, iter = iter, 
+                                                 thin=thin))
+ldaOut.dem.post <-LDA(dtm.dem.post, k, method="Gibbs", control=list(nstart=nstart, 
+                                                 seed = seed, best=best,
+                                                 burnin = burnin, iter = iter, 
+                                                 thin=thin))
+#write out results
+#docs to topics
+ldaOut.topics.rep.pre <- as.matrix(topics(ldaOut.rep.pre))
+ldaOut.topics.rep.post <- as.matrix(topics(ldaOut.rep.post))
+ldaOut.topics.dem.pre <- as.matrix(topics(ldaOut.dem.pre))
+ldaOut.topics.dem.post <- as.matrix(topics(ldaOut.dem.post))
+
+
+#top 10 terms in each topic
+ldaOut.terms.rep.pre <- as.matrix(terms(ldaOut.rep.pre,10))
+ldaOut.terms.rep.post <- as.matrix(terms(ldaOut.rep.post,10))
+ldaOut.terms.dem.pre <- as.matrix(terms(ldaOut.dem.pre,10))
+ldaOut.terms.dem.post <- as.matrix(terms(ldaOut.dem.post,10))
+
+write.csv(ldaOut.terms.rep.pre,file=paste("../output/LDAGibbs",k,"TopicsToTermsRepPre.csv"))
+write.csv(ldaOut.terms.rep.post,file=paste("../output/LDAGibbs",k,"TopicsToTermsRepPost.csv"))
+write.csv(ldaOut.terms.dem.pre,file=paste("../output/LDAGibbs",k,"TopicsToTermsDemPre.csv"))
+write.csv(ldaOut.terms.dem.post,file=paste("../output/LDAGibbs",k,"TopicsToTermsDemPost.csv"))
+
+ldaOut.terms.rep.pre
+ldaOut.terms.rep.post
+ldaOut.terms.dem.pre
+ldaOut.terms.dem.post
+```
+
+## A Closer Look on Specific Topics
+
+Some topics consistently show up in all four subsets, for example: America, nation, law, freedom, right. However, some topics only show up in certain party or time period. In this section, let's look at two topics: war and world.
+\newline
+
+The topic war constantly shows up in Reublican speeches, no matter the time period. At first, I was thinking, before 20th century, there was Civil War, and after in the 20th century, there were WWI and WWII, so it's kind of make sense to have war on a constant topic. However, I realize that the president during WWI was Woodrow Wilson, and the president during WWII was Franklin Roosevelt, in which both of them are Democrats.  Only Abraham Lincoln, who was a Republican, was the president during Civil War.
+\newline
+
+This fact intrigued me, so I looked into their speeches. In Lincoln's speeches, he mentioned "war" over 10 times, while in Roosevelt's third term speech he didn't mention "war" at all, and only once in his fourth inauguration speech. 
+\newline
+
+Another topic that comes to my attention is "world", which is rarely used before 1900s and becomes widely used post 1900s. 
+\newline
+
+Thus, based on two observations, I decide to count the occurance of certain topics to verify my observations.
+```{r}
+docs.rep.pre1 <- tm_map(docs.rep.pre,PlainTextDocument)
+docs.rep.post1 <- tm_map(docs.rep.post,PlainTextDocument)
+docs.dem.pre1 <- tm_map(docs.dem.pre,PlainTextDocument)
+docs.dem.post1 <- tm_map(docs.dem.post,PlainTextDocument)
+
+wrds.rep.pre1 <- strsplit(paste(unlist(docs.rep.pre1), collapse = " "), ' ')[[1]]
+wrds.rep.post1 <- strsplit(paste(unlist(docs.rep.post1), collapse = " "), ' ')[[1]]
+wrds.dem.pre1 <- strsplit(paste(unlist(docs.dem.pre1), collapse = " "), ' ')[[1]]
+wrds.dem.post1 <- strsplit(paste(unlist(docs.dem.post1), collapse = " "), ' ')[[1]]
+
+tblWrds.rep.pre1 <- table(wrds.rep.pre1)
+tblWrds.rep.post1 <- table(wrds.rep.post1)
+tblWrds.dem.pre1 <- table(wrds.dem.pre1)
+tblWrds.dem.post1 <- table(wrds.dem.post1)
+```
+
+The GetOccurence method is based on a stackoverflow post
+\newline
+
+https://stackoverflow.com/questions/35887730/counting-occurence-of-a-word-in-a-text-file-using-r
+```{r}
+# GetOccurence <- function(word, table) {
+#     occurence <- as.data.frame(table)
+#     word <- paste0("\\b", word)
+#     occurence <- occurence[grep(word, occurence[,1]), ]
+#     return(occurence)
+# }
+
+CompareOccurence <- function(word){
+test1 <- GetOccurence(word, tblWrds.rep.pre1)
+test2 <- GetOccurence(word, tblWrds.rep.post1)
+test3 <- GetOccurence(word, tblWrds.dem.pre1)
+test4 <- GetOccurence(word, tblWrds.dem.post1)
+df1 <- merge(test1, test2, by.x = "wrds.rep.pre1", by.y = "wrds.rep.post1", all = TRUE)
+df2 <- merge(test3, test4, by.x = "wrds.dem.pre1", by.y = "wrds.dem.post1", all = TRUE)
+df <- merge(df1, df2, by.x = "wrds.rep.pre1", by.y = "wrds.dem.pre1", all = TRUE)
+colnames(df) <- c("Words", "Rep.pre", "Rep.post", "Dem.pre", "Dem.post")
+return(df)
+}
+
+
+war <- CompareOccurence("war")
+glob <- CompareOccurence("glob")
+world <- CompareOccurence("world")
+
+write.csv(war, file = "../output/war.csv")
+write.csv(glob, file = "../output/glob.csv")
+write.csv(world, file = "../output/world.csv")
+
+war
+glob
+world
+```
+First of all, on the topic war (words include: war, warseek, warfare, wartime), Republicans metioned this topic significant more frequently than Democrats, especially post 1900s. Presidents from Rupublican party have mentioned war for over 158 times, compare with 78 times from the Democrat party.
+\newline
+
+Second, the topic world or globe is more frequently covered after 1900s for both Republican and Demcrat parties. Before 1900s, the word "world" is only used in total of 101 times, whereas after 1900s, this word is used almost 800 times in total. I think this result coincides with the timeline of globalization. Globalization began in the 1820s, but didn't gain momentuem until the late 19th century and early 20th century. It only becomes popular in 1970s.
+
+# Conclusion
+Presidential speeches from both parties and different time periods share lots of similarities. First, all of them deliver positive emotions, such as trust and anticipations. Also, in topic modeling, America, nation, law, freedom, right are some common topics for all addresses. 
+\newline
+
+However, as each presidential address is unqiue, I uncover some differences in their speeches based on time and party differences. First of all, the speech structure changes through time. In the past, speeches are composed by long sentences, while in nowadays in a mixture of short and long. The short sentences have strong tone and concise which is very slogan-like. In addition, from topic modeling,I find that the topic of "world" and "global" didn't come up until 20th century, which constant the timeline of globalization. Party wise, I observe that the topic "war" is frequently mentioned by Rebulican presidents, but not a lot by Democratic Presidents, which is a good reflection of differeces between parties' fundemental political views.
