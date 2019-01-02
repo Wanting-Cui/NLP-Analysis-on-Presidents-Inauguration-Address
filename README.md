@@ -1,12 +1,6 @@
-# Spring 2018
-# Project 1: What did the presidents say at their inauguration?
+# What did the presidents say at their inauguration?
 
 ![image](figs/title.jpg)
-
-### [Project Description](doc/)
-This is the first and only *individual* (as opposed to *team*) this semester. 
-
-Term: Spring 2018
 
 + Projec title: Inauguration Speech
 + This project is conducted by Wanting Cui
