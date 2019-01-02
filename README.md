@@ -1,4 +1,4 @@
-# What did the presidents say at their inauguration?
+# What did the presidents say at their inaugurations?
 
 ![image](figs/title.jpg)
 
